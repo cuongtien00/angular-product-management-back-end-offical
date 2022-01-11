@@ -4,13 +4,11 @@ import com.codegym.productmanagamentangular.dto.request.SignInForm;
 import com.codegym.productmanagamentangular.dto.request.SignUpForm;
 import com.codegym.productmanagamentangular.dto.response.JwtResponse;
 import com.codegym.productmanagamentangular.dto.response.ResponseMessage;
-import com.codegym.productmanagamentangular.model.ChangeAvatar;
-import com.codegym.productmanagamentangular.model.Role;
-import com.codegym.productmanagamentangular.model.RoleName;
-import com.codegym.productmanagamentangular.model.User;
+import com.codegym.productmanagamentangular.model.*;
 import com.codegym.productmanagamentangular.security.jwt.JwtProvider;
 import com.codegym.productmanagamentangular.security.userprimcipal.UserDetailService;
 import com.codegym.productmanagamentangular.security.userprimcipal.UserPrinciple;
+import com.codegym.productmanagamentangular.service.impl.MailServiceImpl;
 import com.codegym.productmanagamentangular.service.impl.RoleServiceImpl;
 import com.codegym.productmanagamentangular.service.impl.UserServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,11 +18,13 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 
 @RestController
@@ -44,6 +44,23 @@ public class AuthController {
     @Autowired
     private UserDetailService userDetailService;
 
+    @Autowired
+    private MailServiceImpl mailService;
+
+    @GetMapping("/verify/{id}")
+    public ResponseEntity<?> verifyAccount(@PathVariable Long id) {
+        Optional<User> userOptional = userService.findById(id);
+        if (!userOptional.isPresent()){
+            return new ResponseEntity<>(new ResponseMessage("Not found!"), HttpStatus.NOT_FOUND);
+        }
+        else {
+            User user = userOptional.get();
+            user.setStatus(1L);
+            userService.save(user);
+            return new ResponseEntity<>(new ResponseMessage("Verify Account is Success, Please login to Use!"),HttpStatus.OK);
+        }
+    }
+
     @PostMapping("/signup")
     public ResponseEntity<?> register(@Valid @RequestBody SignUpForm signUpForm){
         if (userService.existsByUsername(signUpForm.getUsername())){
@@ -55,7 +72,6 @@ public class AuthController {
         if(signUpForm.getAvatar() == null || signUpForm.getAvatar().trim().isEmpty()){
             signUpForm.setAvatar("https://firebasestorage.googleapis.com/v0/b/chinhbeo-18d3b.appspot.com/o/avatar.png?alt=media&token=3511cf81-8df2-4483-82a8-17becfd03211");
         }
-
         User user = new User(signUpForm.getName(), signUpForm.getUsername(), signUpForm.getEmail(), passwordEncoder.encode(signUpForm.getPassword()), signUpForm.getAvatar());
         Set<String> strRoles = signUpForm.getRoles();
         Set<Role> roles = new HashSet<>();
@@ -80,8 +96,12 @@ public class AuthController {
                     roles.add(userRole);
             }
         });
+        user.setStatus(0L);
         user.setRoles(roles);
         userService.save(user);
+        Long userId = userService.findByUsername(signUpForm.getUsername()).get().getId();
+        Mail mail = new Mail("cuongTien.com", signUpForm.getEmail(), "Account Verified", "Welcome to cuongTien app, Please click on the link below to verify this account!!,"+"\nhttp://localhost:8080/verify/"+userId);
+        mailService.sendEmail(mail);
         return new ResponseEntity<>(new ResponseMessage("Success!"),HttpStatus.OK);
     }
     @PostMapping("/login")
@@ -89,9 +109,18 @@ public class AuthController {
         Authentication authentication  = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(signInForm.getUsername(), signInForm.getPassword()));
         SecurityContextHolder.getContext().setAuthentication(authentication);
-        String token = jwtProvider.createToken(authentication);
         UserPrinciple userPrinciple = (UserPrinciple) authentication.getPrincipal();
-        return ResponseEntity.ok(new JwtResponse(userPrinciple.getId(),token, userPrinciple.getName(), userPrinciple.getAvatar(), userPrinciple.getAuthorities()));
+        Long status = userPrinciple.getStatus();
+        if (status == 0) {
+            return new ResponseEntity<>(new ResponseMessage("Need to verification account, Please check your email!"),HttpStatus.OK);
+        }
+        else if (status == 1){
+            String token = jwtProvider.createToken(authentication);
+            return ResponseEntity.ok(new JwtResponse(userPrinciple.getId(),token, userPrinciple.getName(), userPrinciple.getAvatar(), userPrinciple.getAuthorities()));
+        }
+        else {
+            return new ResponseEntity<>(new ResponseMessage("Your account was blocked!"),HttpStatus.OK);
+        }
     }
     @PutMapping("/change-avatar")
     public ResponseEntity<?> updateAvatar(@RequestBody ChangeAvatar changeAvatar){
